@@ -310,6 +310,11 @@ export async function isAudioPlaying(): Promise<boolean> {
   return await invoke<boolean>("is_audio_playing", {});
 }
 
+/** Play the built-in confirmation cue after a successful global save. */
+export async function playSaveConfirmation(): Promise<void> {
+  await invoke("play_save_confirmation", {});
+}
+
 // ── Script commands ─────────────────────────────────────────────
 
 /** Load the script list (id + title only). */
@@ -402,9 +407,9 @@ export async function saveSystemData(
   await invoke("save_system", { projectPath, data });
 }
 
-/** Launch the game process (stub — custom player TBD). */
-export async function launchGame(projectPath: string): Promise<void> {
-  await invoke("launch_game", { projectPath });
+/** Launch the project's normal game executable and return its filename. */
+export async function launchGame(projectPath: string): Promise<string> {
+  return await invoke<string>("launch_game", { projectPath });
 }
 
 // ── PBS commands ─────────────────────────────────────────────────
@@ -752,7 +757,7 @@ async function mockInvoke(
 
     case "launch_game":
       console.log("[mock] Launch game:", args?.projectPath);
-      return;
+      return "Game.exe (mock)";
 
     case "list_pbs_files":
       return ["pokemon.txt", "moves.txt", "items.txt", "abilities.txt", "types.txt", "trainers.txt", "trainer_types.txt", "encounters.txt"];

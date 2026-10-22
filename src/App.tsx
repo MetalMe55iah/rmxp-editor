@@ -18,6 +18,7 @@ import {
   loadEvent,
   saveEvent,
   launchGame,
+  playSaveConfirmation,
 } from "./services/tauriApi";
 import { loadAllTilesetImages } from "./services/imageLoader";
 import { MapTreePanel } from "./components/MapTree/MapTreePanel";
@@ -70,8 +71,10 @@ function AppContent() {
     [null, null, null, null, null, null, null]
   );
   const [selectedTileId, setSelectedTileId] = useState(FIRST_REGULAR_TILE);
+  const [paletteRevealRequest, setPaletteRevealRequest] = useState(0);
   const [mapIsDirty, setMapIsDirty] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [isLaunching, setIsLaunching] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Event editor state
@@ -127,6 +130,7 @@ function AppContent() {
       updateMapDirty(false);
     } catch (err) {
       setError(`Save failed: ${err}`);
+      throw err;
     } finally {
       setLoading(false);
     }
@@ -195,12 +199,24 @@ function AppContent() {
 
   const handleBrowseProject = useCallback(async () => {
     try {
+      if (dirtyCount > 0) {
+        const shouldSave = await confirm(
+          "Save all unsaved changes before opening another project? Cancel keeps the current project open."
+        );
+        if (!shouldSave) return;
+        try {
+          await saveAll();
+        } catch (err) {
+          setError(`Save failed: ${err}`);
+          return;
+        }
+      }
       const selected = await showFolderPicker();
       if (selected) await handleOpenProject(selected);
     } catch (err) {
       setError(`Dialog error: ${err}`);
     }
-  }, [handleOpenProject]);
+  }, [dirtyCount, handleOpenProject, saveAll]);
 
   // ── Map selection with unsaved-changes guard ───────────────────────────────
 
@@ -480,24 +496,59 @@ function AppContent() {
     }
   }, [clipboardEvent]);
 
+  // ── Keyboard shortcuts ─────────────────────────────────────────────────────
+
+  const handleSaveAll = useCallback(async (): Promise<boolean> => {
+    if (dirtyCount === 0) return true;
+    setError(null);
+    try {
+      await saveAll();
+      try {
+        await playSaveConfirmation();
+      } catch (audioError) {
+        console.warn("Save succeeded, but the confirmation sound could not play:", audioError);
+      }
+      return true;
+    } catch (err) {
+      setError(`Save failed: ${err}`);
+      return false;
+    }
+  }, [dirtyCount, saveAll]);
+
   const handleLaunchGame = useCallback(async () => {
     const proj = projectRef.current;
-    if (!proj) return;
+    if (!proj || isLaunching) return;
+
+    setError(null);
+    setIsLaunching(true);
     try {
+      // Play uses the same Save routine as Ctrl+S and the visible Save button.
+      // A failed save returns false and prevents the game from launching.
+      if (dirtyCount > 0 && !(await handleSaveAll())) return;
       await launchGame(proj.path);
     } catch (err) {
       setError(`Launch failed: ${err}`);
+    } finally {
+      setIsLaunching(false);
     }
-  }, []);
+  }, [dirtyCount, handleSaveAll, isLaunching]);
 
-  // ── Keyboard shortcuts ─────────────────────────────────────────────────────
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (dirtyCount === 0) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [dirtyCount]);
 
   // Ctrl+S saves ALL dirty editors (map tiles + database + scripts).
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "s") {
         e.preventDefault();
-        saveAll();
+        void handleSaveAll();
       }
       if ((e.ctrlKey || e.metaKey) && e.key === "o") {
         e.preventDefault();
@@ -506,7 +557,7 @@ function AppContent() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [saveAll, handleBrowseProject]);
+  }, [handleSaveAll, handleBrowseProject]);
 
   // ── Welcome screen ─────────────────────────────────────────────────────────
 
@@ -557,6 +608,14 @@ function AppContent() {
           Essentials Studio — {project.name}{dirtyCount > 0 ? " *" : ""}
         </span>
         <div className="app-titlebar-right">
+          <button
+            className="app-titlebar-btn"
+            onClick={() => void handleSaveAll()}
+            disabled={dirtyCount === 0 || loading}
+            title="Save all changes (Ctrl+S)"
+          >
+            Save
+          </button>
           <button className="app-titlebar-btn" onClick={() => setShowDatabase(true)}>
             Database
           </button>
@@ -568,9 +627,11 @@ function AppContent() {
           </button>
           <button
             className="app-titlebar-btn app-titlebar-btn--play"
-            onClick={handleLaunchGame}
+            onClick={() => void handleLaunchGame()}
+            disabled={loading || isLaunching}
+            title={isLaunching ? "Launching game..." : "Save changes and playtest the current project"}
           >
-            ▶ Play
+            {isLaunching ? "Launching..." : "▶ Play"}
           </button>
           <button className="app-titlebar-btn" onClick={handleBrowseProject}>
             Open...
@@ -600,6 +661,10 @@ function AppContent() {
           autotileImages={autotileImages}
           projectPath={project.path}
           selectedTileId={selectedTileId}
+          onPickTile={(tileId) => {
+            setSelectedTileId(tileId);
+            setPaletteRevealRequest((request) => request + 1);
+          }}
           currentMapId={currentMapId ?? undefined}
           startPosition={startPosition ?? undefined}
           hasClipboardEvent={clipboardEvent !== null}
@@ -618,6 +683,7 @@ function AppContent() {
           tilesetImage={tilesetImage}
           autotileImages={autotileImages}
           selectedTileId={selectedTileId}
+          revealRequest={paletteRevealRequest}
           onSelectTile={setSelectedTileId}
         />
       </div>

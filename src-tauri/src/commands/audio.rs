@@ -1,3 +1,4 @@
+use rodio::source::{SineWave, Source};
 use rodio::{Decoder, OutputStream, Sink};
 use std::fs::File;
 use std::io::BufReader;
@@ -15,6 +16,9 @@ enum AudioMsg {
     Stop,
     IsPlaying {
         result_tx: mpsc::Sender<bool>,
+    },
+    SaveConfirmation {
+        result_tx: mpsc::Sender<Result<(), String>>,
     },
     Shutdown,
 }
@@ -44,6 +48,9 @@ impl AudioHandle {
                             }
                             AudioMsg::IsPlaying { result_tx, .. } => {
                                 let _ = result_tx.send(false);
+                            }
+                            AudioMsg::SaveConfirmation { result_tx } => {
+                                let _ = result_tx.send(Err(format!("No audio device: {}", e)));
                             }
                             AudioMsg::Shutdown => break,
                             _ => {}
@@ -97,6 +104,23 @@ impl AudioHandle {
                             .map(|s| !s.empty())
                             .unwrap_or(false);
                         let _ = result_tx.send(playing);
+                    }
+                    AudioMsg::SaveConfirmation { result_tx } => {
+                        let result = Sink::try_new(&handle)
+                            .map_err(|e| format!("Failed to create save-confirmation sink: {}", e))
+                            .map(|sink| {
+                                sink.set_volume(0.14);
+                                sink.append(
+                                    SineWave::new(880.0)
+                                        .take_duration(std::time::Duration::from_millis(65)),
+                                );
+                                sink.append(
+                                    SineWave::new(1175.0)
+                                        .take_duration(std::time::Duration::from_millis(90)),
+                                );
+                                sink.detach();
+                            });
+                        let _ = result_tx.send(result);
                     }
                     AudioMsg::Shutdown => {
                         if let Some(old) = current_sink.take() {
@@ -210,4 +234,22 @@ pub async fn is_audio_playing(audio: tauri::State<'_, Mutex<AudioHandle>>) -> Re
     result_rx
         .recv()
         .map_err(|_| "Audio thread did not respond".to_string())
+}
+
+/// Play the short, built-in confirmation cue used after a successful save.
+#[tauri::command]
+pub async fn play_save_confirmation(
+    audio: tauri::State<'_, Mutex<AudioHandle>>,
+) -> Result<(), String> {
+    let (result_tx, result_rx) = mpsc::channel();
+    {
+        let handle = audio.lock().map_err(|e| format!("Lock error: {}", e))?;
+        handle
+            .tx
+            .send(AudioMsg::SaveConfirmation { result_tx })
+            .map_err(|_| "Audio thread not running".to_string())?;
+    }
+    result_rx
+        .recv()
+        .map_err(|_| "Audio thread did not respond".to_string())?
 }

@@ -9,6 +9,7 @@ interface Props {
   tilesetImage: HTMLImageElement | null;
   autotileImages: (HTMLImageElement | null)[];
   selectedTileId: number;
+  revealRequest: number;
   onSelectTile: (tileId: number) => void;
 }
 
@@ -26,11 +27,71 @@ export function TilesetPalette({
   tilesetImage,
   autotileImages,
   selectedTileId,
+  revealRequest,
   onSelectTile,
 }: Props) {
   const [activeTab, setActiveTab] = useState<PaletteTab>("tiles");
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const handledRevealRequestRef = useRef(0);
+  const pendingRevealRequestRef = useRef(0);
   const [hoverTileId, setHoverTileId] = useState<number | null>(null);
+
+  // A map eyedropper request must reveal the selected tile even when the same
+  // tile was already selected. The request counter provides that explicit
+  // signal independently of selectedTileId changing.
+  useEffect(() => {
+    if (revealRequest === 0) return;
+
+    const targetTab: PaletteTab =
+      selectedTileId >= FIRST_REGULAR_TILE ? "tiles" : "autotiles";
+    if (revealRequest !== handledRevealRequestRef.current) {
+      handledRevealRequestRef.current = revealRequest;
+      pendingRevealRequestRef.current = revealRequest;
+      if (activeTab !== targetTab) {
+        setActiveTab(targetTab);
+        return;
+      }
+    }
+    if (pendingRevealRequestRef.current !== revealRequest) return;
+    if (activeTab !== targetTab) return;
+
+    const frame = requestAnimationFrame(() => {
+      pendingRevealRequestRef.current = 0;
+      const scroll = scrollRef.current;
+      if (!scroll) return;
+
+      if (targetTab === "tiles") {
+        const canvas = canvasRef.current;
+        if (!canvas || canvas.height === 0) return;
+        const row = Math.floor((selectedTileId - FIRST_REGULAR_TILE) / 8);
+        const scale = canvas.getBoundingClientRect().height / canvas.height;
+        const tileTop = row * TILE_SIZE * scale;
+        const tileHeight = TILE_SIZE * scale;
+        scroll.scrollTop = Math.max(
+          0,
+          tileTop - (scroll.clientHeight - tileHeight) / 2
+        );
+      } else {
+        const slot = Math.floor(selectedTileId / 48) - 1;
+        if (slot < 0) {
+          scroll.scrollTop = 0;
+          return;
+        }
+        const item = scroll.querySelector<HTMLElement>(
+          `[data-autotile-slot="${slot}"]`
+        );
+        if (item) {
+          scroll.scrollTop = Math.max(
+            0,
+            item.offsetTop - (scroll.clientHeight - item.clientHeight) / 2
+          );
+        }
+      }
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [activeTab, revealRequest, selectedTileId]);
 
   // Render the tileset grid onto canvas
   useEffect(() => {
@@ -191,7 +252,7 @@ export function TilesetPalette({
 
       {/* Tiles tab: clickable tileset grid */}
       {activeTab === "tiles" && (
-        <div className="palette-scroll">
+        <div className="palette-scroll" ref={scrollRef}>
           {tilesetImage ? (
             <canvas
               ref={canvasRef}
@@ -211,11 +272,12 @@ export function TilesetPalette({
 
       {/* Autotiles tab */}
       {activeTab === "autotiles" && (
-        <div className="palette-scroll">
+        <div className="palette-scroll" ref={scrollRef}>
           <div className="autotile-list">
             {tilesetInfo.autotile_names.map((name, idx) => (
               <div
                 key={idx}
+                data-autotile-slot={idx}
                 className={`autotile-item ${
                   selectedTileId >= (idx + 1) * 48 &&
                   selectedTileId < (idx + 2) * 48

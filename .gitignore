@@ -16,6 +16,13 @@ dist-ssr
 
 # Tauri
 src-tauri/target
+src-tauri/target-*
+src-tauri/gen/schemas/windows-schema.json
+
+# Local backup and scratch artifacts
+*.bak
+*.before-*
+*.rar
 
 # Local env files
 *.local

@@ -76,7 +76,8 @@ export async function loadImage(path: string): Promise<HTMLImageElement> {
 
   // In Tauri, convert filesystem path to asset protocol URL
   const isFilePath =
-    path.startsWith("/") || path.startsWith("C:") || path.startsWith("D:");
+  path.startsWith("/") ||
+  /^[A-Za-z]:[\\/]/.test(path);
 
   const tryLoadImage = (src: string): Promise<HTMLImageElement> =>
     new Promise((resolve, reject) => {

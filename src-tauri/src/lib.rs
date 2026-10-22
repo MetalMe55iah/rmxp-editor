@@ -30,6 +30,7 @@ pub fn run() {
             preview_audio,
             stop_audio,
             is_audio_playing,
+            play_save_confirmation,
             load_script_list,
             load_script_source,
             save_all_scripts,

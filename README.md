@@ -18,6 +18,30 @@ The original RPG Maker XP editor is a 32-bit Windows app from 2004. Essentials S
 
 ---
 
+## Metal Messiah extended build
+
+This branch packages Metal Messiah's locally tested additions on top of the original
+[`doranteseduardo/rmxp-editor`](https://github.com/doranteseduardo/rmxp-editor)
+project. The original editor, architecture, and upstream history remain credited
+to Eduardo Dorantes and the upstream contributors; the work here is an
+extension, not a claim of authorship over the original project.
+
+Additions in this build include:
+
+- native Windows desktop packaging and safer Windows project/playtest handling;
+- a visible Save button and global `Ctrl+S`, with a short confirmation cue;
+- coordinated dirty-state handling, including save-before-open/play and an
+  unsaved-changes close guard;
+- right-click single-tile picking with automatic palette tab/scroll reveal;
+- stable manual switching between the Tiles, Auto, and Props palette tabs;
+- right-drag rectangular prefab capture and left-click prefab stamping; and
+- a disposable-project regression test for repeated map save/reload cycles.
+
+Local build directories, generated test builds, scratch archives, and timestamped
+backup files are intentionally excluded from the published source.
+
+---
+
 ## Screenshots
 
 | PBS Editor — Pokémon | PBS Editor — Items |
@@ -95,7 +119,10 @@ npm run tauri build  # production bundle → src-tauri/target/release/bundle/
 | `Ctrl+Z` / `Ctrl+Y` | Map · Event Editor | Undo / Redo |
 | `Ctrl+Shift+F` | Script Editor | Global search across all scripts |
 | `Double-click` | Map canvas | Open / create event |
-| `Right-click` | Map canvas | Context menu (copy/paste event, set start) |
+| `Right-click` | Tile layers | Pick one tile and reveal it in the palette |
+| `Right-click drag` | Tile layers | Capture a rectangular prefab brush |
+| `Left-click` | Tile layers, prefab active | Stamp the captured prefab |
+| `Ctrl+Right-click` | Map canvas | Context menu (including set start) |
 | `Middle-click drag` | Map canvas | Pan |
 | `Ctrl+scroll` | Map canvas | Zoom |
 | `Insert` / `Delete` | Event command list | Add / remove command |
@@ -158,7 +185,7 @@ src-tauri/src/
 [x] Map connections — table + visual canvas diagram
 [x] Pokémon Forms (per-form types, stats, abilities, Mega Stone)
 [ ] Encounter editor — visual encounter table per map zone
-[ ] Playtest launcher
+[x] Native playtest launcher (Game.exe, with mkxp fallbacks)
 [ ] Plugin / script snippet library
 ```
 

@@ -28,6 +28,7 @@ interface Props {
   autotileImages: (HTMLImageElement | null)[];
   projectPath?: string;
   selectedTileId: number;
+  onPickTile: (tileId: number) => void;
   currentMapId?: number;
   startPosition?: { mapId: number; x: number; y: number };
   hasClipboardEvent?: boolean;
@@ -40,6 +41,12 @@ interface Props {
   onPasteEvent?: (x: number, y: number) => Promise<void>;
 }
 
+interface PrefabBrush {
+  width: number;
+  height: number;
+  tiles: number[];
+}
+
 export function MapEditor({
   mapData,
   tilesetInfo,
@@ -47,6 +54,7 @@ export function MapEditor({
   autotileImages,
   projectPath: _projectPath,
   selectedTileId,
+  onPickTile,
   currentMapId,
   startPosition,
   hasClipboardEvent,
@@ -98,6 +106,16 @@ export function MapEditor({
   const isSelecting = useRef(false);
   const [tileClipboard, setTileClipboard] = useState<TileClipboard | null>(null);
 
+  // Right-drag prefab selection. The copied tiles are layer-independent so the
+  // block can be stamped onto whichever tile layer is currently active.
+  const [rightDragStart, setRightDragStart] = useState<{ x: number; y: number } | null>(null);
+  const [rightDragEnd, setRightDragEnd] = useState<{ x: number; y: number } | null>(null);
+  const rightDragStartRef = useRef<{ x: number; y: number } | null>(null);
+  const rightDragEndRef = useRef<{ x: number; y: number } | null>(null);
+  const isRightSelecting = useRef(false);
+  const suppressNextContextMenu = useRef(false);
+  const [prefabBrush, setPrefabBrush] = useState<PrefabBrush | null>(null);
+
   // Force re-render trigger (the value is unused; setting it re-runs the
   // component so the render-params ref and derived UI refresh).
   const [, setRenderTick] = useState(0);
@@ -139,6 +157,13 @@ export function MapEditor({
     setViewportX(0);
     setViewportY(0);
     undoStackRef.current.clear();
+    setPrefabBrush(null);
+    setTileClipboard(null);
+    setRightDragStart(null);
+    setRightDragEnd(null);
+    rightDragStartRef.current = null;
+    rightDragEndRef.current = null;
+    isRightSelecting.current = false;
   }, [mapData]);
 
   // Update renderer with tileset image
@@ -234,9 +259,18 @@ export function MapEditor({
     currentMapId !== undefined && startPosition && currentMapId === startPosition.mapId
       ? { x: startPosition.x, y: startPosition.y }
       : undefined;
-  const selectionRect = (selectionStart && selectionEnd)
-    ? { x1: selectionStart.x, y1: selectionStart.y, x2: selectionEnd.x, y2: selectionEnd.y }
-    : null;
+  const selectionRect = (rightDragStart && rightDragEnd && selectedLayer >= 0 && selectedLayer <= 2)
+    ? { x1: rightDragStart.x, y1: rightDragStart.y, x2: rightDragEnd.x, y2: rightDragEnd.y }
+    : (selectionStart && selectionEnd)
+      ? { x1: selectionStart.x, y1: selectionStart.y, x2: selectionEnd.x, y2: selectionEnd.y }
+      : (prefabBrush && cursorTile && selectedLayer >= 0 && selectedLayer <= 2)
+        ? {
+            x1: cursorTile.x,
+            y1: cursorTile.y,
+            x2: cursorTile.x + prefabBrush.width - 1,
+            y2: cursorTile.y + prefabBrush.height - 1,
+          }
+        : null;
   renderStateRef.current = {
     options: {
       showGrid,
@@ -441,12 +475,57 @@ export function MapEditor({
         return;
       }
 
+      // Plain right-button input on tile layers begins either a single-tile
+      // pick or a rectangular prefab selection. Which one it is is decided on
+      // release, after we know whether the pointer reached another map cell.
+      if (e.button === 2 && !e.ctrlKey && mapData && selectedLayer >= 0 && selectedLayer <= 2) {
+        e.preventDefault();
+        const pos = screenToTile(e.clientX, e.clientY);
+        if (
+          !pos ||
+          pos.x < 0 ||
+          pos.x >= mapData.width ||
+          pos.y < 0 ||
+          pos.y >= mapData.height
+        ) return;
+
+        rightDragStartRef.current = pos;
+        rightDragEndRef.current = pos;
+        isRightSelecting.current = true;
+        suppressNextContextMenu.current = false;
+        setRightDragStart(pos);
+        setRightDragEnd(pos);
+        setContextMenu(null);
+        return;
+      }
+
       if (e.button === 0 && mapData) {
         const pos = screenToTile(e.clientX, e.clientY);
         if (!pos) return;
 
         // On Events layer, clicking is for event selection, not tile painting
         if (selectedLayer === 3) {
+          return;
+        }
+
+        if (paintTool === "pencil" && prefabBrush) {
+          const clipboard: TileClipboard = {
+            width: prefabBrush.width,
+            height: prefabBrush.height,
+            layers: [[], [], []],
+          };
+          clipboard.layers[selectedLayer] = prefabBrush.tiles;
+          const changes = pasteTileRegion(mapData, clipboard, pos, selectedLayer);
+          if (changes.length > 0) {
+            undoStackRef.current.push({
+              type: "paste",
+              changes,
+              timestamp: Date.now(),
+            });
+            rendererRef.current?.setMapData(mapData.tiles, mapData.width, mapData.height);
+            setRenderTick((t) => t + 1);
+            onMapDirty();
+          }
           return;
         }
 
@@ -503,6 +582,7 @@ export function MapEditor({
       screenToTile,
       doPaint,
       onMapDirty,
+      prefabBrush,
     ]
   );
 
@@ -530,6 +610,19 @@ export function MapEditor({
           setCursorTile(null);
         }
 
+        if (isRightSelecting.current) {
+          if (
+            pos.x >= 0 &&
+            pos.x < mapData.width &&
+            pos.y >= 0 &&
+            pos.y < mapData.height
+          ) {
+            rightDragEndRef.current = pos;
+            setRightDragEnd(pos);
+          }
+          return;
+        }
+
         if (isSelecting.current && paintTool === "select") {
           setSelectionEnd(pos);
         }
@@ -550,6 +643,48 @@ export function MapEditor({
     (e: React.MouseEvent) => {
       if (e.button === 1) {
         isPanning.current = false;
+        return;
+      }
+
+      if (e.button === 2 && isRightSelecting.current && mapData) {
+        e.preventDefault();
+        const start = rightDragStartRef.current;
+        const end = rightDragEndRef.current ?? start;
+        isRightSelecting.current = false;
+        suppressNextContextMenu.current = true;
+
+        if (start && end && (start.x !== end.x || start.y !== end.y)) {
+          const clipboard = copyTileRegion(
+            mapData,
+            { x1: start.x, y1: start.y, x2: end.x, y2: end.y },
+            selectedLayer
+          );
+          setTileClipboard(clipboard);
+          setPrefabBrush({
+            width: clipboard.width,
+            height: clipboard.height,
+            tiles: [...clipboard.layers[selectedLayer]],
+          });
+          setPaintTool("pencil");
+        } else if (start) {
+          // No movement to another cell: preserve the existing eyedropper and
+          // palette-reveal behavior exactly.
+          const offset =
+            selectedLayer * mapData.width * mapData.height +
+            start.y * mapData.width +
+            start.x;
+          setPrefabBrush(null);
+          setTileClipboard(null);
+          onPickTile(mapData.tiles[offset] ?? 0);
+        }
+
+        rightDragStartRef.current = null;
+        rightDragEndRef.current = null;
+        // The drag rectangle is only the source-selection indicator. Once the
+        // prefab is captured, the preview rectangle is derived from cursorTile
+        // and follows the mouse to show where the block will be stamped.
+        setRightDragStart(null);
+        setRightDragEnd(null);
         return;
       }
 
@@ -607,6 +742,7 @@ export function MapEditor({
       selectedTileId,
       screenToTile,
       onMapDirty,
+      onPickTile,
     ]
   );
 
@@ -656,6 +792,13 @@ export function MapEditor({
           onMouseLeave={() => {
             setCursorTile(null);
             isPanning.current = false;
+            if (isRightSelecting.current) {
+              isRightSelecting.current = false;
+              rightDragStartRef.current = null;
+              rightDragEndRef.current = null;
+              setRightDragStart(null);
+              setRightDragEnd(null);
+            }
             if (isPainting.current) {
               isPainting.current = false;
               if (paintChanges.current.length > 0) {
@@ -671,10 +814,30 @@ export function MapEditor({
           }}
           onContextMenu={(e) => {
             e.preventDefault();
+            if (isRightSelecting.current) return;
+            if (suppressNextContextMenu.current) {
+              suppressNextContextMenu.current = false;
+              return;
+            }
             if (!mapData) return;
             const pos = screenToTile(e.clientX, e.clientY);
             if (!pos) return;
             if (pos.x < 0 || pos.x >= mapData.width || pos.y < 0 || pos.y >= mapData.height) return;
+
+            // On tile layers, plain right-click is an eyedropper. Read the
+            // exact tile from the active live layer, select it as the brush,
+            // and ask the palette to reveal it. Ctrl+right-click retains the
+            // starting-point context menu. Events mode is unchanged.
+            if (selectedLayer >= 0 && selectedLayer <= 2 && !e.ctrlKey) {
+              const offset =
+                selectedLayer * mapData.width * mapData.height +
+                pos.y * mapData.width +
+                pos.x;
+              onPickTile(mapData.tiles[offset] ?? 0);
+              setContextMenu(null);
+              return;
+            }
+
             const evt = mapData.events.find(ev => ev.x === pos.x && ev.y === pos.y);
             setContextMenu({
               x: e.clientX,
